@@ -1,5 +1,6 @@
-import confetti from 'canvas-confetti';
-import { hash160ToAddress, privKeyToWif } from '../game/crypto.js';
+import confetti from "canvas-confetti";
+import { hash160ToAddress, privKeyToWif } from "../game/crypto.js";
+import { t } from "../i18n/index.js";
 
 const SATS_PER_BTC = 100_000_000;
 
@@ -20,16 +21,16 @@ export class WinDialog {
   constructor(dialog, btcUsd) {
     this.dialog = dialog;
     this.btcUsd = btcUsd;
-    dialog.querySelector('#win-close').addEventListener('click', () => {
+    dialog.querySelector("#win-close").addEventListener("click", () => {
       dialog.close();
     });
-    dialog.querySelector('#win-copy').addEventListener('click', async () => {
-      const wif = dialog.querySelector('#win-wif').textContent;
+    dialog.querySelector("#win-copy").addEventListener("click", async () => {
+      const wif = dialog.querySelector("#win-wif").textContent;
       try {
         await navigator.clipboard.writeText(wif);
-        const btn = dialog.querySelector('#win-copy');
+        const btn = dialog.querySelector("#win-copy");
         const orig = btn.textContent;
-        btn.textContent = 'Copied!';
+        btn.textContent = t("win.copied");
         setTimeout(() => (btn.textContent = orig), 1500);
       } catch {
         /* clipboard denied — user can select manually */
@@ -41,24 +42,25 @@ export class WinDialog {
     const address = hash160ToAddress(match.hash160);
     // The WIF compression flag must match the hash160 we matched on. We try
     // the compressed form first, then fall back.
-    const compressed =
-      derived.hash160Compressed.every((b, i) => b === match.hash160[i]);
+    const compressed = derived.hash160Compressed.every(
+      (b, i) => b === match.hash160[i],
+    );
     const wif = privKeyToWif(privKey, compressed);
 
-    this.dialog.querySelector('#win-address').textContent = address;
-    this.dialog.querySelector('#win-wif').textContent = wif;
-    this.dialog.querySelector('#win-btc').textContent = fmtBtc(
-      match.balanceSats
-    );
-    this.dialog.querySelector('#win-usd').textContent = fmtUsd(
+    this.dialog.querySelector("#win-address").textContent = address;
+    this.dialog.querySelector("#win-wif").textContent = wif;
+    this.dialog.querySelector("#win-btc").textContent = fmtBtc(
       match.balanceSats,
-      this.btcUsd
+    );
+    this.dialog.querySelector("#win-usd").textContent = fmtUsd(
+      match.balanceSats,
+      this.btcUsd,
     );
 
-    if (typeof this.dialog.showModal === 'function') {
+    if (typeof this.dialog.showModal === "function") {
       this.dialog.showModal();
     } else {
-      this.dialog.setAttribute('open', '');
+      this.dialog.setAttribute("open", "");
     }
 
     fireConfetti();

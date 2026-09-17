@@ -1,16 +1,23 @@
-import { spin } from './game/spin.js';
-import { loadStats, loadBloom, checkHash160s } from './game/wallets.js';
+import { spin } from "./game/spin.js";
+import { loadStats, loadBloom, checkHash160s } from "./game/wallets.js";
 import {
   hash160ToAddress,
   randomPrivKey,
   deriveAll,
   parsePrivKey,
-} from './game/crypto.js';
-import { Log } from './ui/log.js';
-import { ClassicReels } from './ui/slot-classic.js';
-import { RealisticReels } from './ui/slot-realistic.js';
-import { WinDialog } from './ui/win-dialog.js';
-import { sfx, setMuted, unlock } from './audio/audio.js';
+} from "./game/crypto.js";
+import { Log } from "./ui/log.js";
+import { ClassicReels } from "./ui/slot-classic.js";
+import { RealisticReels } from "./ui/slot-realistic.js";
+import { WinDialog } from "./ui/win-dialog.js";
+import { sfx, setMuted, unlock } from "./audio/audio.js";
+import {
+  initI18n,
+  getLocale,
+  setLocale,
+  t,
+  updateDOMTranslations,
+} from "./i18n/index.js";
 
 // Throttle for autospin only — manual spamming has no extra cooldown beyond
 // the natural duration of the spin animation. With "no delay" on, autospin
@@ -19,8 +26,10 @@ const AUTOSPIN_DELAY_MS = 250;
 const AUTOSPIN_DELAY_NO_DELAY_MS = 16;
 const SATS_PER_BTC = 100_000_000;
 
+let cachedStats = null;
+
 function fmtNumber(n) {
-  return n.toLocaleString('en-US');
+  return n.toLocaleString(getLocale() === "es" ? "es-ES" : "en-US");
 }
 
 function fmtUsdShort(usd) {
@@ -37,35 +46,41 @@ function fmtOdds(walletCount) {
   const log10Denom = log10Keyspace - Math.log10(walletCount);
   const exponent = Math.floor(log10Denom);
   const mantissa = Math.pow(10, log10Denom - exponent);
-  return `1 in ${mantissa.toFixed(2)} × 10^${exponent}`;
+  const prefix = getLocale() === "es" ? "1 en" : "1 in";
+  return `${prefix} ${mantissa.toFixed(2)} × 10^${exponent}`;
 }
 
 function fmtTagline(usd) {
   const billions = Math.floor(usd / 1e9);
-  if (billions >= 1) return `Win up to ${fmtNumber(billions)} billion dollars!`;
+  if (billions >= 1) {
+    return t("topbar.taglineBillion", { amount: fmtNumber(billions) });
+  }
   const millions = Math.floor(usd / 1e6);
-  if (millions >= 1) return `Win up to ${fmtNumber(millions)} million dollars!`;
-  return `Win up to ${fmtNumber(Math.floor(usd))} dollars!`;
+  if (millions >= 1) {
+    return t("topbar.taglineMillion", { amount: fmtNumber(millions) });
+  }
+  return t("topbar.taglineDollars", { amount: fmtNumber(Math.floor(usd)) });
 }
 
 function renderHeaderStats(stats) {
+  if (!stats) return;
   const totalBtc = stats.totalBtc;
   const totalUsd = totalBtc * stats.btcUsdApprox;
-  document.getElementById('tagline').textContent = fmtTagline(totalUsd);
-  document.getElementById('stat-jackpot-btc').textContent =
+  document.getElementById("tagline").textContent = fmtTagline(totalUsd);
+  document.getElementById("stat-jackpot-btc").textContent =
     `${fmtNumber(Math.round(totalBtc))} BTC`;
-  document.getElementById('stat-jackpot-usd').textContent =
+  document.getElementById("stat-jackpot-usd").textContent =
     `≈ ${fmtUsdShort(totalUsd)}`;
-  document.getElementById('stat-odds').textContent = fmtOdds(
-    stats.walletCount
+  document.getElementById("stat-odds").textContent = fmtOdds(stats.walletCount);
+  document.getElementById("stat-odds-flavor").textContent =
+    t("topbar.oddsFlavor");
+  document.getElementById("stat-wallet-count").textContent = fmtNumber(
+    stats.walletCount,
   );
-  document.getElementById('stat-odds-flavor').textContent =
-    'about 10⁷× harder than picking one specific atom in the universe';
-  document.getElementById('stat-wallet-count').textContent = fmtNumber(
-    stats.walletCount
+  document.getElementById("stat-snapshot").textContent = t(
+    "topbar.priceSnapshot",
+    { date: stats.priceSnapshotDate },
   );
-  document.getElementById('stat-snapshot').textContent =
-    `price snapshot: ${stats.priceSnapshotDate}`;
 }
 
 function shorten(s, n = 8) {
@@ -74,39 +89,118 @@ function shorten(s, n = 8) {
 }
 
 async function main() {
+  initI18n();
+  updateDOMTranslations();
+
   const stats = await loadStats();
+  cachedStats = stats;
   // Eager-load Bloom so the first spin doesn't have a visible stall.
   loadBloom();
 
   renderHeaderStats(stats);
 
-  const log = new Log(document.getElementById('log'));
-  log.append(
-    `Loaded ${stats.walletCount} wallets · jackpot ${stats.totalBtc.toFixed(2)} BTC.`
-  );
-  log.append(`Odds per spin: ${fmtOdds(stats.walletCount)}.`);
-  log.append('Pull the lever.');
+  // Language Selector
+  const langSelect = document.getElementById("lang-select");
+  if (langSelect) {
+    langSelect.value = getLocale();
+    langSelect.addEventListener("change", (e) => {
+      setLocale(e.target.value);
+      renderHeaderStats(cachedStats);
+    });
+  }
 
-  const classic = new ClassicReels(document.getElementById('reels-classic'));
-  const realistic = new RealisticReels(
-    document.getElementById('reels-realistic')
+  window.addEventListener("localeChanged", () => {
+    if (langSelect) langSelect.value = getLocale();
+    renderHeaderStats(cachedStats);
+  });
+
+  // Tab Navigation Setup
+  const tabBtnPlay = document.getElementById("tab-btn-play");
+  const tabBtnAbout = document.getElementById("tab-btn-about");
+  const panelPlay = document.getElementById("panel-play");
+  const panelAbout = document.getElementById("panel-about");
+  const aboutPlayBtn = document.getElementById("about-play-btn");
+
+  function switchTab(tab) {
+    if (tab === "about") {
+      tabBtnPlay.classList.remove("active");
+      tabBtnPlay.setAttribute("aria-selected", "false");
+      tabBtnAbout.classList.add("active");
+      tabBtnAbout.setAttribute("aria-selected", "true");
+
+      panelPlay.classList.add("hidden");
+      panelAbout.classList.remove("hidden");
+      window.location.hash = "about";
+    } else {
+      tabBtnAbout.classList.remove("active");
+      tabBtnAbout.setAttribute("aria-selected", "false");
+      tabBtnPlay.classList.add("active");
+      tabBtnPlay.setAttribute("aria-selected", "true");
+
+      panelAbout.classList.add("hidden");
+      panelPlay.classList.remove("hidden");
+      if (
+        window.location.hash === "#about" ||
+        window.location.hash === "#how-it-works"
+      ) {
+        window.location.hash = "";
+      }
+    }
+  }
+
+  tabBtnPlay.addEventListener("click", () => switchTab("play"));
+  tabBtnAbout.addEventListener("click", () => switchTab("about"));
+  if (aboutPlayBtn) {
+    aboutPlayBtn.addEventListener("click", () => {
+      switchTab("play");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+  }
+
+  // Initial tab check from URL hash
+  if (
+    window.location.hash === "#about" ||
+    window.location.hash === "#how-it-works"
+  ) {
+    switchTab("about");
+  }
+
+  const log = new Log(document.getElementById("log"));
+  log.append(
+    t("game.loadedWallets", {
+      count: fmtNumber(stats.walletCount),
+      btc: stats.totalBtc.toFixed(2),
+    }),
   );
-  classic.show();
-  realistic.hide();
+  log.append(t("game.oddsLog", { odds: fmtOdds(stats.walletCount) }));
+  log.append(t("game.pullLever"));
+
+  const classic = new ClassicReels(document.getElementById("reels-classic"));
+  const realistic = new RealisticReels(
+    document.getElementById("reels-realistic"),
+  );
 
   const winDialog = new WinDialog(
-    document.getElementById('win-dialog'),
-    stats.btcUsdApprox
+    document.getElementById("win-dialog"),
+    stats.btcUsdApprox,
   );
 
-  const pullBtn = document.getElementById('pull-btn');
-  const realisticToggle = document.getElementById('toggle-realistic');
-  const noDelayToggle = document.getElementById('toggle-no-delay');
-  const autospinToggle = document.getElementById('toggle-autospin');
-  const soundToggle = document.getElementById('toggle-sound');
+  const pullBtn = document.getElementById("pull-btn");
+  const realisticToggle = document.getElementById("toggle-realistic");
+  const noDelayToggle = document.getElementById("toggle-no-delay");
+  const autospinToggle = document.getElementById("toggle-autospin");
+  const soundToggle = document.getElementById("toggle-sound");
 
-  let realisticMode = false;
-  realisticToggle.addEventListener('change', (e) => {
+  let realisticMode = realisticToggle ? realisticToggle.checked : true;
+  if (realisticMode) {
+    classic.hide();
+    realistic.show();
+  } else {
+    realistic.hide();
+    classic.show();
+  }
+
+  realisticToggle.addEventListener("change", (e) => {
     realisticMode = e.target.checked;
     if (realisticMode) {
       classic.hide();
@@ -118,52 +212,52 @@ async function main() {
   });
 
   setMuted(!soundToggle.checked);
-  soundToggle.addEventListener('change', (e) => {
+  soundToggle.addEventListener("change", (e) => {
     setMuted(!e.target.checked);
   });
 
-  autospinToggle.addEventListener('change', (e) => {
+  autospinToggle.addEventListener("change", (e) => {
     if (e.target.checked && !busy) onPull();
   });
 
   // Settings dialog ----------------------------------------------------------
-  const settingsBtn = document.getElementById('settings-btn');
-  const settingsDialog = document.getElementById('settings-dialog');
-  const settingsClose = document.getElementById('settings-close');
-  const manualInput = document.getElementById('manual-key-input');
-  const manualBtn = document.getElementById('manual-check-btn');
-  const manualResult = document.getElementById('manual-result');
+  const settingsBtn = document.getElementById("settings-btn");
+  const settingsDialog = document.getElementById("settings-dialog");
+  const settingsClose = document.getElementById("settings-close");
+  const manualInput = document.getElementById("manual-key-input");
+  const manualBtn = document.getElementById("manual-check-btn");
+  const manualResult = document.getElementById("manual-result");
 
-  settingsBtn.addEventListener('click', () => {
-    if (typeof settingsDialog.showModal === 'function') {
+  settingsBtn.addEventListener("click", () => {
+    if (typeof settingsDialog.showModal === "function") {
       settingsDialog.showModal();
     } else {
-      settingsDialog.setAttribute('open', '');
+      settingsDialog.setAttribute("open", "");
     }
   });
-  settingsClose.addEventListener('click', () => settingsDialog.close());
+  settingsClose.addEventListener("click", () => settingsDialog.close());
 
   function setManualResult(text, kind) {
     manualResult.textContent = text;
-    manualResult.classList.remove('ok', 'fail', 'err');
+    manualResult.classList.remove("ok", "fail", "err");
     if (kind) manualResult.classList.add(kind);
   }
 
   async function onManualCheck() {
-    setManualResult('', null);
+    setManualResult("", null);
     const raw = manualInput.value.trim();
     if (!raw) {
-      setManualResult('Enter a private key first.', 'err');
+      setManualResult(t("settings.enterKeyFirst"), "err");
       return;
     }
     let parsed;
     try {
       parsed = parsePrivKey(raw);
     } catch (err) {
-      setManualResult(err.message, 'err');
+      setManualResult(err.message, "err");
       return;
     }
-    setManualResult('Checking…', null);
+    setManualResult(t("settings.checking"), null);
     try {
       const derived = deriveAll(parsed.privKey);
       const candidates = [
@@ -173,10 +267,10 @@ async function main() {
       const hit = await checkHash160s(candidates);
       log.append(
         `manual: addr=${derived.addressUncompressed.slice(0, 8)}… ` +
-          `(${parsed.format}) → ${hit ? 'MATCH' : 'no match'}`
+          `(${parsed.format}) → ${hit ? "MATCH" : "no match"}`,
       );
       if (hit) {
-        setManualResult('🎉 Match! Opening prize dialog…', 'ok');
+        setManualResult(t("settings.matchPrize"), "ok");
         settingsDialog.close();
         winDialog.show({
           privKey: parsed.privKey,
@@ -185,25 +279,25 @@ async function main() {
         });
       } else {
         setManualResult(
-          `No match. Address: ${derived.addressUncompressed}`,
-          'fail'
+          t("settings.noMatchAddr", { address: derived.addressUncompressed }),
+          "fail",
         );
       }
     } catch (err) {
-      setManualResult(`Error: ${err.message}`, 'err');
+      setManualResult(t("settings.error", { message: err.message }), "err");
     }
   }
 
-  manualBtn.addEventListener('click', onManualCheck);
-  manualInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
+  manualBtn.addEventListener("click", onManualCheck);
+  manualInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
       e.preventDefault();
       onManualCheck();
     }
   });
 
   // Dev-win flag for QA / curious source-readers.
-  const devWin = new URLSearchParams(location.search).get('devwin') === '1';
+  const devWin = new URLSearchParams(location.search).get("devwin") === "1";
 
   let busy = false;
   async function onPull() {
@@ -242,7 +336,7 @@ async function main() {
 
     log.append(
       `key=${shorten(result.privKeyHex, 6)} ` +
-        `addr=${shorten(result.derived.addressUncompressed, 6)}`
+        `addr=${shorten(result.derived.addressUncompressed, 6)}`,
     );
 
     if (noDelay) {
@@ -258,14 +352,14 @@ async function main() {
       const matchedAddress = hash160ToAddress(result.match.hash160);
       log.append(
         `🎉 MATCH: ${matchedAddress} ` +
-          `(${(Number(result.match.balanceSats) / SATS_PER_BTC).toFixed(8)} BTC)`
+          `(${(Number(result.match.balanceSats) / SATS_PER_BTC).toFixed(8)} BTC)`,
       );
       sfx.win();
       // Stop autospin on win — let the player see what happened.
       if (autospinToggle.checked) autospinToggle.checked = false;
       winDialog.show(result);
     } else {
-      log.append('→ no match');
+      log.append("→ no match");
       sfx.lose();
     }
 
@@ -280,12 +374,13 @@ async function main() {
     }
   }
 
-  pullBtn.addEventListener('click', onPull);
-  document.addEventListener('keydown', (e) => {
-    if (e.code !== 'Space') return;
+  pullBtn.addEventListener("click", onPull);
+  document.addEventListener("keydown", (e) => {
+    if (e.code !== "Space") return;
     const tag = document.activeElement?.tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-    if (settingsDialog.open || document.getElementById('win-dialog').open) return;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    if (settingsDialog.open || document.getElementById("win-dialog").open)
+      return;
     e.preventDefault();
     onPull();
   });
@@ -293,6 +388,6 @@ async function main() {
 
 main().catch((err) => {
   console.error(err);
-  const log = document.getElementById('log');
+  const log = document.getElementById("log");
   if (log) log.value = `Error: ${err.message}`;
 });
